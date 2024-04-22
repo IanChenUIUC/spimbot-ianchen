@@ -43,18 +43,19 @@ GET_AVAILABLE_BULLETS   = 0xffff2014
 MMIO_STATUS             = 0xffff204c
 
 .data
-map:        .space 1600
-board:      .space 512
-has_timer:  .byte  0
-has_respawn:.byte  0
+map:        .space  1600
+board:      .space  512
+bot_side:   .byte   0
+move_ready: .byte   0
+path_done:  .byte   1
+
+path_pos:   .word   0   # current position in the path  
 
 
 ERR_STRING: .asciiz    "ERROR ERROR CRASHING AND BURNING"
 
 .text
 main:
-    sb      $0      has_respawn  
-    # Construct interrupt mask
     li      $t4, 0
     or      $t4, $t4, TIMER_INT_MASK            # enable timer interrupt
     or      $t4, $t4, BONK_INT_MASK             # enable bonk interrupt
@@ -63,44 +64,51 @@ main:
     or      $t4, $t4, 1 # global enable
     mtc0    $t4, $12
 
-    # s7 stores which side we are on
+    # set which side the bot is on
     la      $t0     BOT_X
     lw      $t0     0($t0)
     li      $t1     100
-    slt     $s7     $t1     $t0
+    slt     $t0     $t1     $t0
+    sb      $t0     bot_side
 
+    # store the map
     la      $t0     map
     add     $t1     $0      GET_MAP
     sw      $t0     0($t1)
 
-loop: 
-    lb      $t0     has_respawn
-    bne     $t0     $0      main
-
-    jal     chase_bot
-    j       loop
-
-# reload until bullet count >= $a0
-# a0, number of bullets to reload to
-reload_bullets:
-    sub     $sp     $sp     4    
-    sw      $ra     0($sp)
-
-    la      $t0     GET_AVAILABLE_BULLETS
-    lw      $t0     0($t0)
-    sub     $t0     $t0     $a0
-
-    div     $a0     $t0     20
-    rem     $t1     $t0     20
-    slt     $t1     $0      $t1
-    add     $a0     $a0     $t1
-    sub     $a0     $0      $a0         # negate
-
+    # reload some bullets
+    li      $a0     2
     jal     solve_puzzle
 
-    lw      $ra     0($sp)
-    add     $sp     $sp     4
-    jr      $ra
+loop: 
+
+loop_do_move:
+    lb      $t0     move_ready
+    beq     $t0     $0      loop_do_chase
+    sb      $0      move_ready
+
+    la      $t0     path_pos
+    lw      $t0     0($t0)    
+
+    lw      $a0     4($t0)          # cur
+    lw      $a1     0($t0)          # next
+    jal     do_move
+
+    lw      $t0     TIMER
+    add     $t0     $t0     8000
+    sw      $t0     TIMER     
+
+loop_do_chase:
+    lb      $t0     path_done
+    beq     $t0     $0  loop_done
+    sb      $0      path_done
+
+    jal     chase_bot
+
+loop_done:
+    # li      $a0     1
+    # jal     solve_puzzle
+    j       loop
 
 # a0 stores the counter
 solve_puzzle:
@@ -127,10 +135,11 @@ solve_puzzle_end:
     add     $sp     $sp     8
     jr      $ra
 
+# sets the path
+# starts the bot to chase with interrupt request
 chase_bot:
-    sub     $sp     $sp     8
+    sub     $sp     $sp     4
     sw      $ra     0($sp)
-    sw      $s0     4($sp)
 
     jal     get_other_pos
     move    $a0     $v0   
@@ -142,19 +151,18 @@ chase_bot:
     jal     get_other_pos
     move    $a2     $v0   
     jal     pathfind  
-    move    $s0     $v0
 
-    move    $a0     $s0
-    jal     reload_bullets    
+    la      $t0     path
+    mul     $v0     $v0     4
+    add     $t0     $t0     $v0
+    sw      $t0     path_pos
 
-    move    $a0     $s0
-    jal     get_bot_pos
-    move    $a1     $v0
-    jal     do_path
+    lw      $t0     TIMER               # start the bot chasing  
+    add     $t0     $t0     8000
+    sw      $t0     TIMER    
 
     lw      $ra     0($sp)
-    lw      $s0     4($sp)
-    add     $sp     $sp     8
+    add     $sp     $sp     4
     jr      $ra
 
 # v0 stores the pos
@@ -179,104 +187,36 @@ get_other_pos:
     add     $v0     $t0     $t1
     jr      $ra
 
-# a0 stores the length of path
-# a1 stores the start
-do_path:
-    sub     $sp     $sp     4
-    sw      $ra     0($sp)
-
-    la      $s0     path                # start of path
-    move    $s1     $s0                 # current position in path
-    mul     $t0     $a0     4
-    add     $s1     $s1     $t0
-
-    lw      $t0     TIMER
-    add     $t0     $t0     8000
-    sw      $t0     TIMER               # request timer interrupt
-
-    move    $s2     $a1                 # current position
-    j       do_path_loop
-
-do_path_loop:
-    bge     $s0     $s1     do_path_end
-    
-    lb      $t0     has_timer
-    beq     $t0     $0      do_path_loop    
-    sb      $0      has_timer
-
-    move    $a0     $s2
-    lw      $a1     -4($s1)
-    jal     do_move
-    move    $s2     $v0
-
-    sub     $s1     $s1     4
-    j       do_path_loop
-
-do_path_end:
-    li      $t0     0                   # velocity
-    la      $t1     VELOCITY
-    sw      $t0     0($t1)              # set velocity
-
-    lw      $ra     0($sp)    
-    add     $sp     $sp     4
-    jr      $ra
-
 # set the velocity and direction based on the path
-# request a timer interrupt to stop move
 # a0 stores current
 # a1 stores next
-# returns the next position (a1)
 do_move:
+    sub     $sp     $sp     8
+    sw      $ra     0($sp)
+    sw      $s0     4($sp)
+    move    $s0     $a1    
+
     li      $t0     10                  # velocity
     la      $t1     VELOCITY
     sw      $t0     0($t1)              # set velocity
-    move    $v0     $a1       
-
-    la      $t1     TIMER
-    lw      $t0     0($t1)
-    add     $t0     $t0     8000
-    sw      $t0     0($t1)              # request timer interrupt
 
     div     $t0     $a0     SIZE        # p.r
     rem     $t1     $a0     SIZE        # p.c
     div     $t2     $a1     SIZE        # q.r
     rem     $t3     $a1     SIZE        # q.c
 
-    sub     $t0     $t0     $t2         # p.r - q.r
-    sub     $t1     $t1     $t3         # p.c - q.c
-
-    # reserve t2 for the angle
-
-is_north:
-    bne     $t0     1       is_south
-    bne     $t1     0       is_south
-    li      $t2     270
-    j       end_do_move
-
-is_south:
-    bne     $t0     -1      is_east
-    bne     $t1     0       is_east
-    li      $t2     90
-    j       end_do_move
-
-is_east:
-    bne     $t0     0       is_west
-    bne     $t1     -1      is_west
-    li      $t2     0
-    j       end_do_move
-
-is_west:
-    bne     $t0     0       direction_err
-    bne     $t1     1       direction_err
-    li      $t2     180
-    j       end_do_move
+    sub     $a0     $t0     $t2         # p.r - q.r
+    sub     $a1     $t1     $t3         # p.c - q.c
+    jal     get_angle
+    move    $t2     $v0                 # angle
 
 end_do_move:
     la      $t0     map  
-    add     $t0     $t0     $a1         # &map[next]
+    add     $t0     $t0     $s0         # &map[next]
     lb      $t0     0($t0)              # map[next]
 
-    bne     $t0     $s7     do_shoot
+    lb      $t1     bot_side
+    bne     $t0     $t1     do_shoot
     j       do_set_angle
 
 do_shoot:
@@ -292,6 +232,42 @@ do_set_angle:
     li      $t2     1
     sw      $t2     0($t3)
 
+return_do_move:
+    lw      $ra     0($sp)
+    lw      $s0     4($sp)
+    add     $sp     $sp     8
+    jr      $ra
+
+# a0 is p.r - q.r
+# a1 is p.c - q.c
+# v0 is the angle (0, 90, 180, 270)
+get_angle:
+
+is_north:
+    bne     $a0     1       is_south
+    bne     $a1     0       is_south
+    li      $v0     270
+    j       end_get_angle
+
+is_south:
+    bne     $a0     -1      is_east
+    bne     $a1     0       is_east
+    li      $v0     90
+    j       end_get_angle
+
+is_east:
+    bne     $a0     0       is_west
+    bne     $a1     -1      is_west
+    li      $v0     0
+    j       end_get_angle
+
+is_west:
+    bne     $a0     0       direction_err
+    bne     $a1     1       direction_err
+    li      $v0     180
+    j       end_get_angle
+
+end_get_angle:
     jr      $ra
 
 direction_err:
@@ -362,15 +338,6 @@ bonk_interrupt:
     #Fill in your bonk handler code here
     j       interrupt_dispatch      # see if other interrupts are waiting
 
-timer_interrupt:
-    sw      $0, TIMER_ACK
-
-    li      $t0     1
-    la      $t1     has_timer
-    sb      $t0     0($t1)
-
-    j        interrupt_dispatch     # see if other interrupts are waiting
-
 request_puzzle_interrupt:
     sw      $0, REQUEST_PUZZLE_ACK
 
@@ -379,10 +346,29 @@ request_puzzle_interrupt:
 respawn_interrupt:
     sw      $0, RESPAWN_ACK
 
-    li      $t0     1
-    la      $t1     has_respawn
-    sb      $t0     0($t1)
+    j       interrupt_dispatch
 
+timer_interrupt:
+    sw      $0, TIMER_ACK
+
+    sw      $0      VELOCITY        # set velocity to 0
+
+    la      $t0     path_pos
+    la      $t1     path
+
+    lw      $t2     0($t0)          # path is done
+    ble     $t2     $t1      end_timer   
+
+    sub     $t2     $t2     4       # move onto next pos in path  
+    sw      $t2     0($t0)
+
+    li      $t0     1               # alert main program that 
+    sb      $t0     move_ready      # the next move is ready
+    j       interrupt_dispatch
+
+end_timer:
+    li      $t0     1
+    sb      $t0     path_done
     j       interrupt_dispatch
 
 non_intrpt:                         # was some non-interrupt

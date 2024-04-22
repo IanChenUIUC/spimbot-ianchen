@@ -441,6 +441,8 @@ make_path_loop:
     j       make_path_loop
 
 make_path_end:
+    sw      $s7     0($t1)              # append the start
+
     lw      $ra     0($sp)
     lw      $s0     4($sp)
     lw      $s1     8($sp)
