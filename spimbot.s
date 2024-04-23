@@ -47,9 +47,8 @@ map:        .space  1600
 board:      .space  512
 bot_side:   .byte   0
 path_done:  .byte   1
-
+has_puzzle: .byte   0
 path_pos:   .word   0   # current position in the path  
-
 
 ERR_STRING: .asciiz    "ERROR ERROR CRASHING AND BURNING"
 
@@ -75,50 +74,49 @@ main:
     add     $t1     $0      GET_MAP
     sw      $t0     0($t1)
 
-    # reload some bullets (SKIP)
-    li      $a0     1
-    jal     solve_puzzle
+    jal     request_puzzle
 
 loop: 
  
+loop_solve_puzzle:
+    lb      $t0     has_puzzle
+    beq     $t0     $0  loop_do_chase
+    sb      $0      has_puzzle
+
+    jal     solve_puzzle
+    jal     request_puzzle
+
 loop_do_chase:
     lb      $t0     path_done
-    beq     $t0     $0  loop_done
+    beq     $t0     $0  loop_end
     sb      $0      path_done
 
     jal     chase_bot
 
-loop_done:
-    # lw      $t0     GET_AVAILABLE_BULLETS
-    # bge     $t0     40   loop
-
-    li      $a0     1
-    jal     solve_puzzle
+loop_end:
     j       loop
 
-# a0 stores the counter
+
+# requests a puzzle :)
+# no arguments
+request_puzzle:
+    la      $t0     board                       # request puzzle
+    sw      $t0     REQUEST_PUZZLE    
+    jr      $ra
+
+# requires a puzzle to be successfully requested
+# no arguments
 solve_puzzle:
-    sub     $sp     $sp     8
+    sub     $sp     $sp     4
     sw      $ra     0($sp)
-    sw      $s0     4($sp)
-    move    $s0     $a0
 
-solve_puzzle_loop:
-    ble     $s0     $0      solve_puzzle_end
-
-    la      $a0     board                       # request puzzle
-    sw      $a0     REQUEST_PUZZLE    
-    jal     quant_solve
+    la      $a0     board
+    jal     sudoku_solve
     la      $a0     board
     sw      $a0     SUBMIT_SOLUTION
 
-    sub     $s0     $s0     1
-    j       solve_puzzle_loop
-
-solve_puzzle_end:
     lw      $ra     0($sp)
-    lw      $s0     4($sp)    
-    add     $sp     $sp     8
+    add     $sp     $sp     4
     jr      $ra
 
 # sets the path
@@ -186,21 +184,22 @@ interrupt_handler:
 .set at
     la      $k0, chunkIH
     sw      $a0, 0($k0)        # Get some free registers
-    sw      $v0, 4($k0)        # by storing them to a global variable
-    sw      $t0, 8($k0)
-    sw      $t1, 12($k0)
-    sw      $t2, 16($k0)
-    sw      $t3, 20($k0)
-    sw      $t4, 24($k0)
-    sw      $t5, 28($k0)
+    sw      $a1, 4($k0)        # Get some free registers
+    sw      $v0, 8($k0)        # by storing them to a global variable
+    sw      $t0, 12($k0)
+    sw      $t1, 16($k0)
+    sw      $t2, 20($k0)
+    sw      $t3, 24($k0)
+    sw      $t4, 28($k0)
+    sw      $t5, 32($k0)
 
     # Save coprocessor1 registers!
     # If you don't do this and you decide to use division or multiplication
     #   in your main code, and interrupt handler code, you get WEIRD bugs.
     mfhi    $t0
-    sw      $t0, 32($k0)
-    mflo    $t0
     sw      $t0, 36($k0)
+    mflo    $t0
+    sw      $t0, 40($k0)
 
     mfc0    $k0, $13                # Get Cause register
     srl     $a0, $k0, 2
@@ -235,6 +234,8 @@ bonk_interrupt:
 
 request_puzzle_interrupt:
     sw      $0, REQUEST_PUZZLE_ACK
+    li      $t0 1
+    sb      $t0 has_puzzle        
 
     j       interrupt_dispatch
 
@@ -267,7 +268,7 @@ timer_interrupt:
     move    $ra     $t5
 
     lw      $t0     TIMER
-    add     $t0     $t0     16000
+    add     $t0     $t0     8000
     sw      $t0     TIMER     
 
     j       interrupt_dispatch
@@ -295,13 +296,14 @@ done:
     mtlo    $t0
 
     lw      $a0, 0($k0)             # Restore saved registers
-    lw      $v0, 4($k0)
-    lw      $t0, 8($k0)
-    lw      $t1, 12($k0)
-    lw      $t2, 16($k0)
-    lw      $t3, 20($k0)
-    lw      $t4, 24($k0)
-    lw      $t5, 28($k0)
+    lw      $a1, 4($k0)             # Restore saved registers
+    lw      $v0, 8($k0)
+    lw      $t0, 12($k0)
+    lw      $t1, 16($k0)
+    lw      $t2, 20($k0)
+    lw      $t3, 24($k0)
+    lw      $t4, 28($k0)
+    lw      $t5, 32($k0)
 
 .set noat
     move    $at, $k1        # Restore $at
@@ -317,7 +319,7 @@ do_move:
     sw      $s0     4($sp)
     move    $s0     $a1    
 
-    li      $t0     5                  # velocity
+    li      $t0     10                  # velocity
     la      $t1     VELOCITY
     sw      $t0     0($t1)              # set velocity
 
