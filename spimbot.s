@@ -46,7 +46,6 @@ MMIO_STATUS             = 0xffff204c
 map:        .space  1600
 board:      .space  512
 bot_side:   .byte   0
-move_ready: .byte   0
 path_done:  .byte   1
 
 path_pos:   .word   0   # current position in the path  
@@ -76,28 +75,12 @@ main:
     add     $t1     $0      GET_MAP
     sw      $t0     0($t1)
 
-    # reload some bullets
-    li      $a0     2
+    # reload some bullets (SKIP)
+    li      $a0     1
     jal     solve_puzzle
 
 loop: 
-
-loop_do_move:
-    lb      $t0     move_ready
-    beq     $t0     $0      loop_do_chase
-    sb      $0      move_ready
-
-    la      $t0     path_pos
-    lw      $t0     0($t0)    
-
-    lw      $a0     4($t0)          # cur
-    lw      $a1     0($t0)          # next
-    jal     do_move
-
-    lw      $t0     TIMER
-    add     $t0     $t0     8000
-    sw      $t0     TIMER     
-
+ 
 loop_do_chase:
     lb      $t0     path_done
     beq     $t0     $0  loop_done
@@ -106,8 +89,11 @@ loop_do_chase:
     jal     chase_bot
 
 loop_done:
-    # li      $a0     1
-    # jal     solve_puzzle
+    # lw      $t0     GET_AVAILABLE_BULLETS
+    # bge     $t0     40   loop
+
+    li      $a0     1
+    jal     solve_puzzle
     j       loop
 
 # a0 stores the counter
@@ -158,7 +144,7 @@ chase_bot:
     sw      $t0     path_pos
 
     lw      $t0     TIMER               # start the bot chasing  
-    add     $t0     $t0     8000
+    add     $t0     $t0     500
     sw      $t0     TIMER    
 
     lw      $ra     0($sp)
@@ -187,6 +173,141 @@ get_other_pos:
     add     $v0     $t0     $t1
     jr      $ra
 
+.kdata
+chunkIH:            .space 40
+non_intrpt_str:     .asciiz "Non-interrupt exception\n"
+unhandled_str:      .asciiz "Unhandled interrupt type\n"
+.ktext 0x80000180
+
+interrupt_handler:
+.set noat
+    move    $k1, $at        # Save $at
+                            # NOTE: Don't touch $k1 or else you destroy $at!
+.set at
+    la      $k0, chunkIH
+    sw      $a0, 0($k0)        # Get some free registers
+    sw      $v0, 4($k0)        # by storing them to a global variable
+    sw      $t0, 8($k0)
+    sw      $t1, 12($k0)
+    sw      $t2, 16($k0)
+    sw      $t3, 20($k0)
+    sw      $t4, 24($k0)
+    sw      $t5, 28($k0)
+
+    # Save coprocessor1 registers!
+    # If you don't do this and you decide to use division or multiplication
+    #   in your main code, and interrupt handler code, you get WEIRD bugs.
+    mfhi    $t0
+    sw      $t0, 32($k0)
+    mflo    $t0
+    sw      $t0, 36($k0)
+
+    mfc0    $k0, $13                # Get Cause register
+    srl     $a0, $k0, 2
+    and     $a0, $a0, 0xf           # ExcCode field
+    bne     $a0, 0, non_intrpt
+
+interrupt_dispatch:                 # Interrupt:
+    mfc0    $k0, $13                # Get Cause register, again
+    beq     $k0, 0, done            # handled all outstanding interrupts
+
+    and     $a0, $k0, BONK_INT_MASK     # is there a bonk interrupt?
+    bne     $a0, 0, bonk_interrupt
+
+    and     $a0, $k0, TIMER_INT_MASK    # is there a timer interrupt?
+    bne     $a0, 0, timer_interrupt
+
+    and     $a0, $k0, REQUEST_PUZZLE_INT_MASK
+    bne     $a0, 0, request_puzzle_interrupt
+
+    and     $a0, $k0, RESPAWN_INT_MASK
+    bne     $a0, 0, respawn_interrupt
+
+    li      $v0, PRINT_STRING       # Unhandled interrupt types
+    la      $a0, unhandled_str
+    syscall
+    j       done
+
+bonk_interrupt:
+    sw      $0, BONK_ACK
+    #Fill in your bonk handler code here
+    j       interrupt_dispatch      # see if other interrupts are waiting
+
+request_puzzle_interrupt:
+    sw      $0, REQUEST_PUZZLE_ACK
+
+    j       interrupt_dispatch
+
+respawn_interrupt:
+    sw      $0, RESPAWN_ACK
+
+    j       interrupt_dispatch
+
+timer_interrupt:
+    sw      $0      TIMER_ACK
+
+    sw      $0      VELOCITY        # set velocity to 0
+
+    la      $t0     path_pos
+    la      $t1     path
+
+    lw      $t2     0($t0)          # path is done
+    ble     $t2     $t1      end_timer   
+
+    sub     $t2     $t2     4       # move onto next pos in path  
+    sw      $t2     0($t0)
+
+    la      $t0     path_pos
+    lw      $t0     0($t0)    
+
+    lw      $a0     4($t0)          # cur
+    lw      $a1     0($t0)          # next
+    move    $t5     $ra
+    jal     do_move
+    move    $ra     $t5
+
+    lw      $t0     TIMER
+    add     $t0     $t0     16000
+    sw      $t0     TIMER     
+
+    j       interrupt_dispatch
+
+end_timer:
+    li      $t0     1
+    sb      $t0     path_done
+    j       interrupt_dispatch
+
+non_intrpt:                         # was some non-interrupt
+    li      $v0, PRINT_STRING
+    la      $a0, non_intrpt_str
+    syscall                         # print out an error message
+    # fall through to done
+
+done:
+    la      $k0, chunkIH
+
+    # Restore coprocessor1 registers!
+    # If you don't do this and you decide to use division or multiplication
+    #   in your main code, and interrupt handler code, you get WEIRD bugs.
+    lw      $t0, 32($k0)
+    mthi    $t0
+    lw      $t0, 36($k0)
+    mtlo    $t0
+
+    lw      $a0, 0($k0)             # Restore saved registers
+    lw      $v0, 4($k0)
+    lw      $t0, 8($k0)
+    lw      $t1, 12($k0)
+    lw      $t2, 16($k0)
+    lw      $t3, 20($k0)
+    lw      $t4, 24($k0)
+    lw      $t5, 28($k0)
+
+.set noat
+    move    $at, $k1        # Restore $at
+.set at
+    eret
+
 # set the velocity and direction based on the path
 # a0 stores current
 # a1 stores next
@@ -196,7 +317,7 @@ do_move:
     sw      $s0     4($sp)
     move    $s0     $a1    
 
-    li      $t0     10                  # velocity
+    li      $t0     5                  # velocity
     la      $t1     VELOCITY
     sw      $t0     0($t1)              # set velocity
 
@@ -211,7 +332,8 @@ do_move:
     move    $t2     $v0                 # angle
 
 end_do_move:
-    la      $t0     map  
+    la      $t0     map
+    sw      $t0     GET_MAP
     add     $t0     $t0     $s0         # &map[next]
     lb      $t0     0($t0)              # map[next]
 
@@ -275,129 +397,5 @@ direction_err:
     la      $a0     ERR_STRING
     syscall
 
-    j       loop
-
-.kdata
-chunkIH:            .space 40
-non_intrpt_str:     .asciiz "Non-interrupt exception\n"
-unhandled_str:      .asciiz "Unhandled interrupt type\n"
-.ktext 0x80000180
-interrupt_handler:
-.set noat
-    move    $k1, $at        # Save $at
-                            # NOTE: Don't touch $k1 or else you destroy $at!
-.set at
-    la      $k0, chunkIH
-    sw      $a0, 0($k0)        # Get some free registers
-    sw      $v0, 4($k0)        # by storing them to a global variable
-    sw      $t0, 8($k0)
-    sw      $t1, 12($k0)
-    sw      $t2, 16($k0)
-    sw      $t3, 20($k0)
-    sw      $t4, 24($k0)
-    sw      $t5, 28($k0)
-
-    # Save coprocessor1 registers!
-    # If you don't do this and you decide to use division or multiplication
-    #   in your main code, and interrupt handler code, you get WEIRD bugs.
-    mfhi    $t0
-    sw      $t0, 32($k0)
-    mflo    $t0
-    sw      $t0, 36($k0)
-
-    mfc0    $k0, $13                # Get Cause register
-    srl     $a0, $k0, 2
-    and     $a0, $a0, 0xf           # ExcCode field
-    bne     $a0, 0, non_intrpt
-
-
-
-interrupt_dispatch:                 # Interrupt:
-    mfc0    $k0, $13                # Get Cause register, again
-    beq     $k0, 0, done            # handled all outstanding interrupts
-
-    and     $a0, $k0, BONK_INT_MASK     # is there a bonk interrupt?
-    bne     $a0, 0, bonk_interrupt
-
-    and     $a0, $k0, TIMER_INT_MASK    # is there a timer interrupt?
-    bne     $a0, 0, timer_interrupt
-
-    and     $a0, $k0, REQUEST_PUZZLE_INT_MASK
-    bne     $a0, 0, request_puzzle_interrupt
-
-    and     $a0, $k0, RESPAWN_INT_MASK
-    bne     $a0, 0, respawn_interrupt
-
-    li      $v0, PRINT_STRING       # Unhandled interrupt types
-    la      $a0, unhandled_str
-    syscall
-    j       done
-
-bonk_interrupt:
-    sw      $0, BONK_ACK
-    #Fill in your bonk handler code here
-    j       interrupt_dispatch      # see if other interrupts are waiting
-
-request_puzzle_interrupt:
-    sw      $0, REQUEST_PUZZLE_ACK
-
-    j       interrupt_dispatch
-
-respawn_interrupt:
-    sw      $0, RESPAWN_ACK
-
-    j       interrupt_dispatch
-
-timer_interrupt:
-    sw      $0, TIMER_ACK
-
-    sw      $0      VELOCITY        # set velocity to 0
-
-    la      $t0     path_pos
-    la      $t1     path
-
-    lw      $t2     0($t0)          # path is done
-    ble     $t2     $t1      end_timer   
-
-    sub     $t2     $t2     4       # move onto next pos in path  
-    sw      $t2     0($t0)
-
-    li      $t0     1               # alert main program that 
-    sb      $t0     move_ready      # the next move is ready
-    j       interrupt_dispatch
-
-end_timer:
-    li      $t0     1
-    sb      $t0     path_done
-    j       interrupt_dispatch
-
-non_intrpt:                         # was some non-interrupt
-    li      $v0, PRINT_STRING
-    la      $a0, non_intrpt_str
-    syscall                         # print out an error message
-    # fall through to done
-
-done:
-    la      $k0, chunkIH
-
-    # Restore coprocessor1 registers!
-    # If you don't do this and you decide to use division or multiplication
-    #   in your main code, and interrupt handler code, you get WEIRD bugs.
-    lw      $t0, 32($k0)
-    mthi    $t0
-    lw      $t0, 36($k0)
-    mtlo    $t0
-
-    lw      $a0, 0($k0)             # Restore saved registers
-    lw      $v0, 4($k0)
-    lw      $t0, 8($k0)
-    lw      $t1, 12($k0)
-    lw      $t2, 16($k0)
-    lw      $t3, 20($k0)
-    lw      $t4, 24($k0)
-    lw      $t5, 28($k0)
-
-.set noat
-    move    $at, $k1        # Restore $at
-.set at
-    eret
+    # j       loop
+    j       end_get_angle
