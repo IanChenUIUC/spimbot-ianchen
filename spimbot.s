@@ -96,7 +96,6 @@ loop_do_chase:
 loop_end:
     j       loop
 
-
 # requests a puzzle :)
 # no arguments
 request_puzzle:
@@ -241,6 +240,9 @@ request_puzzle_interrupt:
 
 respawn_interrupt:
     sw      $0, RESPAWN_ACK
+
+    la      $t0 path
+    sw      $t0 path_pos    
 
     j       interrupt_dispatch
 
