@@ -1,8 +1,9 @@
-MAP_SIZE                = 40
-TILE_SIZE               = 8
-HALF_TILE_SIZE          = 4
-MAX_PATH_LEN            = 4
-
+MAP_SIZE                = 40            ## 40 x 40 map
+TILE_SIZE               = 8             ## 8 x 8 tile    
+HALF_TILE_SIZE          = 4             ## 8 / 2 = 4
+MAX_DIST                = 8             ## manhattan dist between path endpoint and opponent
+MAX_BULLETS             = 100           ## don't solve puzzles when bullets > 100
+PATHFIND_BUFFER         = 12            ## start calculating next path when almost done with current path
 
 # syscall constants
 PRINT_STRING            = 4
@@ -56,6 +57,12 @@ has_puzzle: .byte   0
 path_pos:   .word   0   # current position in the path  
 path_end:   .word   0   # end of path (beginning) 
 
+path_buf:   .space  48  # PATHFIND_BUFFER positions on the path
+                        # when continuously updating path
+path_len:   .word   0   # storing the length of the new path 
+                        # while using buffer
+buf_ready:  .byte  0    # stores when the buffer is done
+
 ERR_STRING: .asciiz    "ERROR ERROR CRASHING AND BURNING"
 
 .text
@@ -83,6 +90,9 @@ main:
 loop: 
  
 loop_solve_puzzle:
+    lw      $t0     GET_AVAILABLE_BULLETS
+    bge     $t0     MAX_BULLETS     loop_do_chase
+
     lb      $t0     has_puzzle
     beq     $t0     $0  loop_do_chase
     sb      $0      has_puzzle
@@ -91,14 +101,132 @@ loop_solve_puzzle:
     jal     request_puzzle
 
 loop_do_chase:
+    # check if path is done
     lb      $t0     path_done
-    beq     $t0     $0  loop_end
-    sb      $0      path_done
+    bne     $t0     $0  do_chase_finished
 
+    # check if path is almost done
+    # and start calculating next path if it is
+
+    lw      $t0     path_end                    # skip if already using buffer
+    la      $t1     path_buf
+    beq     $t0     $t1        loop_end
+
+    lw      $t0     path_pos
+    lw      $t1     path_end
+    sub     $t0     $t0     $t1                 # remaining path length (* 4)
+
+    li      $t1     4
+    mul     $t1     $t1     PATHFIND_BUFFER
+
+    ble     $t0     $t1     do_chase_near_finished
+
+    # check if endpoint is outdated
+    # that is, the manhattan distance between end and other is >= MAX_DIST
+    # requires the remaining path length to be larger than PATHFIND_BUFFER
+
+    jal     get_other_pos                       # v0 stores other   
+    div     $t0     $v0     MAP_SIZE            # other.r
+    rem     $t1     $v0     MAP_SIZE            # other.c
+
+    lw      $t2     path_end
+    lw      $t2     0($t2)
+    rem     $t3     $t2     MAP_SIZE            # end.c
+    div     $t2     $t2     MAP_SIZE            # end.r
+
+    sub     $t0     $t0     $t2                 # dr
+    abs     $t0     $t0                         # |dr|    
+    sub     $t1     $t1     $t3                 # dc
+    abs     $t1     $t1                         # |dc|    
+    add     $t0     $t0     $t1                 # manhattan dist
+
+    bge     $t0     MAX_DIST    do_chase_outdated
+
+    j       loop_end
+
+do_chase_finished:
+    # when reaches the end of the path and needs to start another
+
+    jal     get_bot_pos
+    move    $a0     $v0
     jal     chase_bot
+    move    $a0     $v0
+    jal     set_path_pos
+    jal     start_bot_chase
+    sb      $0      path_done
+    
+    j       loop_end
+
+do_chase_near_finished:
+    # when the bot is near the end of the path
+
+    # copy the remaining of the path into buffer
+    la      $a0     path_buf
+    lw      $a1     path_end
+    lw      $a2     path_pos
+    jal     copy_path_to_buffer
+
+    # set the path pos and end
+    sw      $v0     path_pos
+    la      $t0     path_buf
+    sw      $t0     path_end
+
+    # start finding new path
+    lw      $a0     0($t0)
+    jal     chase_bot
+
+    li      $t0     1
+    sb      $t0     buf_ready    
+
+    j       loop_end
+
+do_chase_outdated:
+    # when the opponent has moved too far from original destination
+
+    # copy the remainder of the path into buffer
+    # exactly the next PATHFIND_BUFFER elements
+    la      $a0     path_buf
+    lw      $a2     path_pos
+    sub     $a1     $a2     48                  # 4 * PATHFIND_BUFFER
+    jal     copy_path_to_buffer
+
+    # set the path pos and end
+    sw      $v0     path_pos
+    la      $t0     path_buf
+    sw      $t0     path_end
+
+    # start finding new path
+    lw      $t0     path_end
+    lw      $a0     0($t0)                      # goes pathfind_buffer positions ahead of path 
+    jal     chase_bot
+
+    li      $t0     1
+    sb      $t0     buf_ready    
+
+    j       loop_end  
 
 loop_end:
     j       loop
+
+# copies from path_end to path_pos
+# a0 is the start of the buffer
+# a1 is the path_end
+# a2 is the path_pos
+# v0 is the pos of the pos
+copy_path_to_buffer:
+    move    $v0     $a0
+    bgt     $a1     $a2     copy_path_return
+
+    lw      $t0     0($a1)
+    sw      $t0     0($a0)
+
+    add     $a0     $a0     4
+    add     $a1     $a1     4
+    j       copy_path_to_buffer    
+
+copy_path_return:
+    sub     $v0     $v0     4 
+    jr      $ra
 
 # requests a puzzle :)
 # no arguments
@@ -123,48 +251,46 @@ solve_puzzle:
     jr      $ra
 
 # sets the path
-# starts the bot to chase with interrupt request
+# a0 stores the start of the chase
+# v0 is the length of the path
 chase_bot:
-    sub     $sp     $sp     4
+    sub     $sp     $sp     8
     sw      $ra     0($sp)
+    sw      $s0     4($sp)
+    move    $s0     $a0    
 
     jal     get_other_pos
     move    $a0     $v0   
     jal     pathfind_init
 
-    jal     get_bot_pos
     la      $a0     map   
-    move    $a1     $v0
+    move    $a1     $s0
     jal     get_other_pos
     move    $a2     $v0   
     jal     pathfind  
+    sw      $v0     path_len
 
+    lw      $ra     0($sp)
+    lw      $s0     4($sp)
+    add     $sp     $sp     8
+    jr      $ra
+
+# a0 stores the length of the path
 set_path_pos:
     la      $t0     path
-    mul     $v0     $v0     4
-    add     $t0     $t0     $v0
+    mul     $a0     $a0     4
+    add     $t0     $t0     $a0
     sw      $t0     path_pos
-
-    bge     $v0     MAX_PATH_LEN    set_path_pos_cutoff
 
     la      $t0     path
     sw      $t0     path_end 
-    j       start_bot_chase   
+    jr      $ra
 
-set_path_pos_cutoff:
-    lw      $t0     path_pos
-    li      $t1     4
-    mul     $t1     $t1     MAX_PATH_LEN
-    sub     $t0     $t0     $t1
-    sw      $t0     path_end
-
+# requests timer 
 start_bot_chase:
     lw      $t0     TIMER               # start the bot chasing  
     add     $t0     $t0     500
     sw      $t0     TIMER    
-
-    lw      $ra     0($sp)
-    add     $sp     $sp     4
     jr      $ra
 
 # v0 stores the pos
@@ -255,6 +381,11 @@ interrupt_dispatch:                 # Interrupt:
 
 bonk_interrupt:
     sw      $0, BONK_ACK
+
+    la      $t0 path
+    sw      $t0 path_pos    
+    sw      $t0 path_end
+
     j       interrupt_dispatch      # see if other interrupts are waiting
 
 request_puzzle_interrupt:
@@ -267,9 +398,14 @@ request_puzzle_interrupt:
 respawn_interrupt:
     sw      $0, RESPAWN_ACK
 
+    sw      $0  VELOCITY
     la      $t0 path
     sw      $t0 path_pos    
     sw      $t0 path_end
+
+    lw      $t0 TIMER
+    add     $t0 $t0 500
+    sw      $t0 TIMER    
 
     j       interrupt_dispatch
 
@@ -305,9 +441,39 @@ timer_interrupt:
     j       interrupt_dispatch
 
 end_timer:
+    # if we are on the buffer path,
+    # then go immediately to the ready path
+    # otherwise we are done with path
+    lw      $t0     path_end
+    la      $t1     path_buf
+
+    bne     $t0     $t1         end_path
+
+    lb      $t0     buf_ready
+    bne     $t0     $0          end_buffer_path
+
+    j       interrupt_dispatch
+
+end_path:
     li      $t0     1
     sb      $t0     path_done
     j       interrupt_dispatch
+
+end_buffer_path:
+    sb      $0      buf_ready
+
+    la      $t0     path
+    sw      $t0     path_end
+    lw      $t1     path_len
+    mul     $t1     $t1     4
+    add     $t0     $t0     $t1
+    sw      $t0     path_pos
+
+    lw      $t0     TIMER               # start the bot chasing  
+    add     $t0     $t0     500
+    sw      $t0     TIMER    
+
+    j       interrupt_dispatch  
 
 non_intrpt:                         # was some non-interrupt
     li      $v0, PRINT_STRING

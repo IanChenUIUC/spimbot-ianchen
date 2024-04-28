@@ -249,6 +249,11 @@ interrupt_dispatch:                 # Interrupt:
 
 bonk_interrupt:
     sw      $0, BONK_ACK
+
+    la      $t0 path
+    sw      $t0 path_pos    
+    sw      $t0 path_end
+
     j       interrupt_dispatch      # see if other interrupts are waiting
 
 request_puzzle_interrupt:
@@ -261,6 +266,7 @@ request_puzzle_interrupt:
 respawn_interrupt:
     sw      $0, RESPAWN_ACK
 
+    sw      $0  VELOCITY
     la      $t0 path
     sw      $t0 path_pos    
     sw      $t0 path_end
