@@ -1,4 +1,9 @@
-SIZE                    = 40
+MAP_SIZE                = 40
+TILE_SIZE               = 8
+HALF_TILE_SIZE          = 4
+MAX_PATH_LEN            = 4
+
+
 # syscall constants
 PRINT_STRING            = 4
 PRINT_CHAR              = 11
@@ -47,7 +52,9 @@ board:      .space  512
 bot_side:   .byte   0
 path_done:  .byte   1
 has_puzzle: .byte   0
+
 path_pos:   .word   0   # current position in the path  
+path_end:   .word   0   # end of path (beginning) 
 
 ERR_STRING: .asciiz    "ERROR ERROR CRASHING AND BURNING"
 
@@ -132,11 +139,26 @@ chase_bot:
     move    $a2     $v0   
     jal     pathfind  
 
+set_path_pos:
     la      $t0     path
     mul     $v0     $v0     4
     add     $t0     $t0     $v0
     sw      $t0     path_pos
 
+    bge     $v0     MAX_PATH_LEN    set_path_pos_cutoff
+
+    la      $t0     path
+    sw      $t0     path_end 
+    j       start_bot_chase   
+
+set_path_pos_cutoff:
+    lw      $t0     path_pos
+    li      $t1     4
+    mul     $t1     $t1     MAX_PATH_LEN
+    sub     $t0     $t0     $t1
+    sw      $t0     path_end
+
+start_bot_chase:
     lw      $t0     TIMER               # start the bot chasing  
     add     $t0     $t0     500
     sw      $t0     TIMER    
@@ -149,11 +171,11 @@ chase_bot:
 get_bot_pos:
     la      $t0     BOT_Y
     lw      $t0     0($t0)
-    div     $t0     $t0     8
-    mul     $t0     $t0     SIZE
+    div     $t0     $t0     TILE_SIZE
+    mul     $t0     $t0     MAP_SIZE
     la      $t1     BOT_X
     lw      $t1     0($t1)
-    div     $t1     $t1     8
+    div     $t1     $t1     TILE_SIZE
     add     $v0     $t0     $t1
     jr      $ra
 
@@ -161,7 +183,7 @@ get_bot_pos:
 get_other_pos:
     la      $t0     OTHER_Y
     lw      $t0     0($t0)
-    mul     $t0     $t0     SIZE
+    mul     $t0     $t0     MAP_SIZE
     la      $t1     OTHER_X
     lw      $t1     0($t1)
     add     $v0     $t0     $t1
@@ -247,6 +269,7 @@ respawn_interrupt:
 
     la      $t0 path
     sw      $t0 path_pos    
+    sw      $t0 path_end
 
     j       interrupt_dispatch
 
@@ -254,8 +277,8 @@ timer_interrupt:
     sw      $0      TIMER_ACK
     sw      $0      VELOCITY        # set velocity to 0
 
-    lw      $t0     path_pos        # path is done
-    la      $t1     path
+    lw      $t0     path_pos        
+    lw      $t1     path_end
     ble     $t0     $t1      end_timer   
 
     sub     $t0     $t0     4       # move onto next pos in path  
@@ -266,12 +289,14 @@ timer_interrupt:
 
     lw      $t0     path_pos        # next
     lw      $t0     0($t0)
-    rem     $a2     $t0     SIZE    # next.col
-    mul     $a2     $a2     8       
-    add     $a2     $a2     4       # next.x
-    div     $a3     $t0     SIZE    # next.row
-    mul     $a3     $a3     8       
-    add     $a3     $a3     4       # next.y
+
+    # set (a2) next.x and (a3) next.y
+    rem     $a2     $t0     MAP_SIZE
+    mul     $a2     $a2     TILE_SIZE       
+    add     $a2     $a2     HALF_TILE_SIZE
+    div     $a3     $t0     MAP_SIZE
+    mul     $a3     $a3     TILE_SIZE       
+    add     $a3     $a3     HALF_TILE_SIZE       
 
     move    $t5     $ra
     jal     do_move
@@ -334,9 +359,9 @@ do_move:
     sub     $s0     $a2     $a0         # q.x - p.x
     sub     $s1     $a3     $a1         # q.y - p.y
 
-    div     $t1     $a0     8           # col
-    div     $t2     $a1     8           # row
-    mul     $t1     $t1     SIZE
+    div     $t1     $a2     8           # col
+    div     $t2     $a3     8           # row
+    mul     $t2     $t2     MAP_SIZE
     add     $s2     $t1     $t2         # next position
 
     li      $t0     10                  # velocity

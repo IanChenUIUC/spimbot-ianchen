@@ -1,4 +1,4 @@
-SIZE = 40
+MAP_SIZE = 40
 
 .data
 
@@ -43,12 +43,12 @@ is_walkable:
     jal     get_point                   # a0 = p.r; a1 = p.c
     move    $ra     $t9                 # restore $ra
 
-    blt     $v0     0       ret_f
-    blt     $v1     0       ret_f
-    bge     $v0     SIZE    ret_f
-    bge     $v1     SIZE    ret_f
+    blt     $v0     0           ret_f
+    blt     $v1     0           ret_f
+    bge     $v0     MAP_SIZE    ret_f
+    bge     $v1     MAP_SIZE    ret_f
 
-    mul     $v0     $v0     SIZE
+    mul     $v0     $v0     MAP_SIZE
     add     $v0     $v0     $v1
     add     $v0     $v0     $t8         # &map[p.r * size + p.c]
     lb      $v0     0($v0)              # map[p.r * size + p.c]
@@ -368,8 +368,8 @@ astar:
     lw      $s4     0($t0)              # dist[p]
     add     $s4     $s4     1           # dist[p] + 1
 
-    div     $a0     $s3     SIZE
-    rem     $a1     $s3     SIZE
+    div     $a0     $s3     MAP_SIZE
+    rem     $a1     $s3     MAP_SIZE
     jal     make_point
 
     move    $a0     $s0
@@ -384,7 +384,7 @@ for_all_neighbors:
 
     lhu     $t0     0($s5)              # q.r
     lhu     $t1     2($s5)              # q.c
-    mul     $t3     $t0     SIZE
+    mul     $t3     $t0     MAP_SIZE
     add     $t3     $t3     $t1         # q.pos
 
     la      $t6     seen
@@ -467,8 +467,8 @@ pathfind_init:
 
     li      $t4     2000                    # 2000 for distance
 
-    div     $t5     $a0     SIZE            # end.r
-    rem     $t6     $a0     SIZE            # end.c
+    div     $t5     $a0     MAP_SIZE        # end.r
+    rem     $t6     $a0     MAP_SIZE        # end.c
 
 pathfind_init_loop:
     beq     $t0     1600    pathfind_init_end
@@ -480,8 +480,8 @@ pathfind_init_loop:
     add     $t2     $t2     4
 
 calculate_heuristic:
-    div     $t7     $t0     SIZE            # cur.r
-    rem     $t8     $t0     SIZE            # cur.c
+    div     $t7     $t0     MAP_SIZE        # cur.r
+    rem     $t8     $t0     MAP_SIZE        # cur.c
 
     sub     $t7     $t7     $t5             # cur.r - end.r
     sub     $t8     $t8     $t6             # cur.c - end.c
