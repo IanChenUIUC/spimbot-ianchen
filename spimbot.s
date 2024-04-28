@@ -5,6 +5,19 @@ PRINT_CHAR              = 11
 PRINT_INT               = 1
 
 # memory-mapped I/O
+BONK_INT_MASK           = 0x1000
+BONK_ACK                = 0xffff0060
+
+TIMER_INT_MASK          = 0x8000
+TIMER_ACK               = 0xffff006c
+
+REQUEST_PUZZLE_INT_MASK = 0x800       ## Puzzle
+REQUEST_PUZZLE_ACK      = 0xffff00d8  ## Puzzle
+
+RESPAWN_INT_MASK        = 0x2000      ## Respawn
+RESPAWN_ACK             = 0xffff00f0  ## Respawn
+
+MMIO_STATUS             = 0xffff204c
 VELOCITY                = 0xffff0010
 ANGLE                   = 0xffff0014
 ANGLE_CONTROL           = 0xffff0018
@@ -21,26 +34,12 @@ GET_MAP                 = 0xffff2008
 REQUEST_PUZZLE          = 0xffff00d0  ## Puzzle
 SUBMIT_SOLUTION         = 0xffff00d4  ## Puzzle
 
-BONK_INT_MASK           = 0x1000
-BONK_ACK                = 0xffff0060
-
-TIMER_INT_MASK          = 0x8000
-TIMER_ACK               = 0xffff006c
-
-REQUEST_PUZZLE_INT_MASK = 0x800       ## Puzzle
-REQUEST_PUZZLE_ACK      = 0xffff00d8  ## Puzzle
-
-RESPAWN_INT_MASK        = 0x2000      ## Respawn
-RESPAWN_ACK             = 0xffff00f0  ## Respawn
-
 SHOOT                   = 0xffff2000
 CHARGE_SHOT             = 0xffff2004
 
 GET_OP_BULLETS          = 0xffff200c
 GET_MY_BULLETS          = 0xffff2010
 GET_AVAILABLE_BULLETS   = 0xffff2014
-
-MMIO_STATUS             = 0xffff204c
 
 .data
 map:        .space  1600
@@ -63,16 +62,14 @@ main:
     mtc0    $t4, $12
 
     # set which side the bot is on
-    la      $t0     BOT_X
-    lw      $t0     0($t0)
+    lw      $t0     BOT_X
     li      $t1     100
     slt     $t0     $t1     $t0
     sb      $t0     bot_side
 
     # store the map
     la      $t0     map
-    add     $t1     $0      GET_MAP
-    sw      $t0     0($t1)
+    sw      $t0     GET_MAP
 
     jal     request_puzzle
 
@@ -174,6 +171,12 @@ get_other_pos:
 chunkIH:            .space 40
 non_intrpt_str:     .asciiz "Non-interrupt exception\n"
 unhandled_str:      .asciiz "Unhandled interrupt type\n"
+
+three:  .float  3.0
+five:   .float  5.0
+PI:     .float  3.141592
+F180:   .float  180.0
+
 .ktext 0x80000180
 
 interrupt_handler:
@@ -182,23 +185,25 @@ interrupt_handler:
                             # NOTE: Don't touch $k1 or else you destroy $at!
 .set at
     la      $k0, chunkIH
-    sw      $a0, 0($k0)        # Get some free registers
-    sw      $a1, 4($k0)        # Get some free registers
-    sw      $v0, 8($k0)        # by storing them to a global variable
-    sw      $t0, 12($k0)
-    sw      $t1, 16($k0)
-    sw      $t2, 20($k0)
-    sw      $t3, 24($k0)
-    sw      $t4, 28($k0)
-    sw      $t5, 32($k0)
+    sw      $a0, 0($k0)             # Restore saved registers
+    sw      $a1, 4($k0)             # Restore saved registers
+    sw      $a2, 8($k0)             # Restore saved registers
+    sw      $a3, 12($k0)            # Restore saved registers
+    sw      $v0, 16($k0)
+    sw      $t0, 20($k0)
+    sw      $t1, 24($k0)
+    sw      $t2, 28($k0)
+    sw      $t3, 32($k0)
+    sw      $t4, 36($k0)
+    sw      $t5, 40($k0)
 
     # Save coprocessor1 registers!
     # If you don't do this and you decide to use division or multiplication
     #   in your main code, and interrupt handler code, you get WEIRD bugs.
     mfhi    $t0
-    sw      $t0, 36($k0)
+    sw      $t0, 44($k0)
     mflo    $t0
-    sw      $t0, 40($k0)
+    sw      $t0, 48($k0)
 
     mfc0    $k0, $13                # Get Cause register
     srl     $a0, $k0, 2
@@ -228,7 +233,6 @@ interrupt_dispatch:                 # Interrupt:
 
 bonk_interrupt:
     sw      $0, BONK_ACK
-    #Fill in your bonk handler code here
     j       interrupt_dispatch      # see if other interrupts are waiting
 
 request_puzzle_interrupt:
@@ -248,30 +252,30 @@ respawn_interrupt:
 
 timer_interrupt:
     sw      $0      TIMER_ACK
-
     sw      $0      VELOCITY        # set velocity to 0
 
-    la      $t0     path_pos
+    lw      $t0     path_pos        # path is done
     la      $t1     path
+    ble     $t0     $t1      end_timer   
 
-    lw      $t2     0($t0)          # path is done
-    ble     $t2     $t1      end_timer   
+    sub     $t0     $t0     4       # move onto next pos in path  
+    sw      $t0     path_pos
 
-    sub     $t2     $t2     4       # move onto next pos in path  
-    sw      $t2     0($t0)
+    lw      $a0     BOT_X           # cur.x
+    lw      $a1     BOT_Y           # cur.y
 
-    la      $t0     path_pos
-    lw      $t0     0($t0)    
+    lw      $t0     path_pos        # next
+    lw      $t0     0($t0)
+    rem     $a2     $t0     SIZE    # next.col
+    mul     $a2     $a2     8       
+    add     $a2     $a2     4       # next.x
+    div     $a3     $t0     SIZE    # next.row
+    mul     $a3     $a3     8       
+    add     $a3     $a3     4       # next.y
 
-    lw      $a0     4($t0)          # cur
-    lw      $a1     0($t0)          # next
     move    $t5     $ra
     jal     do_move
     move    $ra     $t5
-
-    lw      $t0     TIMER
-    add     $t0     $t0     8000
-    sw      $t0     TIMER     
 
     j       interrupt_dispatch
 
@@ -292,114 +296,152 @@ done:
     # Restore coprocessor1 registers!
     # If you don't do this and you decide to use division or multiplication
     #   in your main code, and interrupt handler code, you get WEIRD bugs.
-    lw      $t0, 32($k0)
+    lw      $t0, 44($k0)
     mthi    $t0
-    lw      $t0, 36($k0)
+    lw      $t0, 48($k0)
     mtlo    $t0
 
     lw      $a0, 0($k0)             # Restore saved registers
     lw      $a1, 4($k0)             # Restore saved registers
-    lw      $v0, 8($k0)
-    lw      $t0, 12($k0)
-    lw      $t1, 16($k0)
-    lw      $t2, 20($k0)
-    lw      $t3, 24($k0)
-    lw      $t4, 28($k0)
-    lw      $t5, 32($k0)
+    lw      $a2, 8($k0)             # Restore saved registers
+    lw      $a3, 12($k0)            # Restore saved registers
+    lw      $v0, 16($k0)
+    lw      $t0, 20($k0)
+    lw      $t1, 24($k0)
+    lw      $t2, 28($k0)
+    lw      $t3, 32($k0)
+    lw      $t4, 36($k0)
+    lw      $t5, 40($k0)
 
 .set noat
     move    $at, $k1        # Restore $at
 .set at
     eret
 
-# set the velocity and direction based on the path
-# a0 stores current
-# a1 stores next
+# set the velocity (10) and direction based on the path
+# a0 stores current x pixel
+# a1 stores current y pixel
+# a2 stores next x pixel
+# a3 stores next y pixel
+# requests timer interrupt when move is done
 do_move:
-    sub     $sp     $sp     8
+    sub     $sp     $sp     16
     sw      $ra     0($sp)
-    sw      $s0     4($sp)
-    move    $s0     $a1    
+    sw      $s0     4($sp)              # dx 
+    sw      $s1     8($sp)              # dy
+    sw      $s2     12($sp)             # next.pos
+
+    sub     $s0     $a2     $a0         # q.x - p.x
+    sub     $s1     $a3     $a1         # q.y - p.y
+
+    div     $t1     $a0     8           # col
+    div     $t2     $a1     8           # row
+    mul     $t1     $t1     SIZE
+    add     $s2     $t1     $t2         # next position
 
     li      $t0     10                  # velocity
     la      $t1     VELOCITY
     sw      $t0     0($t1)              # set velocity
 
-    div     $t0     $a0     SIZE        # p.r
-    rem     $t1     $a0     SIZE        # p.c
-    div     $t2     $a1     SIZE        # q.r
-    rem     $t3     $a1     SIZE        # q.c
+    move    $a0     $s0
+    move    $a1     $s1
+    jal     euclidean_dist
+    mul     $t0     $v0     1000        # 1000 cycles per pixel
 
-    sub     $a0     $t0     $t2         # p.r - q.r
-    sub     $a1     $t1     $t3         # p.c - q.c
-    jal     get_angle
-    move    $t2     $v0                 # angle
+    lw      $t1     TIMER               # request timer
+    add     $t0     $t0     $t1
+    sw      $t0     TIMER
 
-end_do_move:
+    move    $a0     $s0
+    move    $a1     $s1
+    jal     sb_arctan                   # v0 stores angle
+
+do_set_angle:
+    sw      $v0     ANGLE
+    li      $t0     1
+    sw      $t0     ANGLE_CONTROL
+
+do_try_shoot:
     la      $t0     map
     sw      $t0     GET_MAP
-    add     $t0     $t0     $s0         # &map[next]
+    add     $t0     $t0     $s2         # &map[next]
     lb      $t0     0($t0)              # map[next]
 
     lb      $t1     bot_side
     bne     $t0     $t1     do_shoot
-    j       do_set_angle
+    j       return_do_move
 
 do_shoot:
-    div     $t3     $t2     90          # get direction
-    add     $t3     $t3     1
-    rem     $t3     $t3     4
-    sw      $t3     SHOOT
-
-do_set_angle:
-    la      $t3     ANGLE               # set angle
-    sw      $t2     0($t3)
-    la      $t3     ANGLE_CONTROL       # set abs angle
-    li      $t2     1
-    sw      $t2     0($t3)
+    div     $t0     $v0     90          # get direction
+    add     $t0     $t0     1
+    rem     $t0     $t0     4
+    sw      $t0     SHOOT
 
 return_do_move:
     lw      $ra     0($sp)
     lw      $s0     4($sp)
-    add     $sp     $sp     8
+    lw      $s1     8($sp)
+    lw      $s2     12($sp)
+    add     $sp     $sp     16
     jr      $ra
 
-# a0 is p.r - q.r
-# a1 is p.c - q.c
-# v0 is the angle (0, 90, 180, 270)
-get_angle:
-
-is_north:
-    bne     $a0     1       is_south
-    bne     $a1     0       is_south
-    li      $v0     270
-    j       end_get_angle
-
-is_south:
-    bne     $a0     -1      is_east
-    bne     $a1     0       is_east
-    li      $v0     90
-    j       end_get_angle
-
-is_east:
-    bne     $a0     0       is_west
-    bne     $a1     -1      is_west
-    li      $v0     0
-    j       end_get_angle
-
-is_west:
-    bne     $a0     0       direction_err
-    bne     $a1     1       direction_err
-    li      $v0     180
-    j       end_get_angle
-
-end_get_angle:
+# -----------------------------------------------------------------------
+# sb_arctan - computes the arctangent of y / x
+# $a0 - x
+# $a1 - y
+# returns the arctangent
+# -----------------------------------------------------------------------
+sb_arctan:
+    li      $v0, 0      # angle = 0;
+    abs     $t0, $a0    # get absolute values
+    abs     $t1, $a1
+    ble     $t1, $t0, no_TURN_90      
+    ## if (abs(y) > abs(x)) { rotate 90 degrees }
+    move    $t0, $a1    # int temp = y;
+    neg     $a1, $a0    # y = -x;      
+    move    $a0, $t0    # x = temp;    
+    li      $v0, 90     # angle = 90;  
+no_TURN_90:
+    bgez    $a0, pos_x      # skip if (x >= 0)
+    ## if (x < 0) 
+    add     $v0, $v0, 180   # angle += 180;
+pos_x:
+    mtc1    $a0, $f0
+    mtc1    $a1, $f1
+    cvt.s.w $f0, $f0        # convert from ints to floats
+    cvt.s.w $f1, $f1
+    div.s   $f0, $f1, $f0   # float v = (float) y / (float) x;
+    mul.s   $f1, $f0, $f0   # v^^2
+    mul.s   $f2, $f1, $f0   # v^^3
+    l.s     $f3, three      # load 3.0
+    div.s   $f3, $f2, $f3   # v^^3/3
+    sub.s   $f6, $f0, $f3   # v - v^^3/3
+    mul.s   $f4, $f1, $f2   # v^^5
+    l.s     $f5, five       # load 5.0
+    div.s   $f5, $f4, $f5   # v^^5/5
+    add.s   $f6, $f6, $f5   # value = v - v^^3/3 + v^^5/5
+    l.s     $f8, PI         # load PI
+    div.s   $f6, $f6, $f8   # value / PI
+    l.s     $f7, F180       # load 180.0
+    mul.s   $f6, $f6, $f7   # 180.0 * value / PI
+    cvt.w.s $f6, $f6        # convert "delta" back to integer
+    mfc1    $t0, $f6
+    add     $v0, $v0, $t0   # angle += delta
     jr      $ra
-
-direction_err:
-    li      $v0     PRINT_STRING
-    la      $a0     ERR_STRING
-    syscall
-
-    # j       loop
-    j       end_get_angle
+    
+# -----------------------------------------------------------------------
+# euclidean_dist - computes sqrt(x^2 + y^2)
+# $a0 - x
+# $a1 - y
+# returns the distance
+# -----------------------------------------------------------------------
+euclidean_dist:
+    mul     $a0, $a0, $a0   # x^2
+    mul     $a1, $a1, $a1   # y^2
+    add     $v0, $a0, $a1   # x^2 + y^2
+    mtc1    $v0, $f0
+    cvt.s.w $f0, $f0        # float(x^2 + y^2)
+    sqrt.s  $f0, $f0        # sqrt(x^2 + y^2)
+    cvt.w.s $f0, $f0        # int(sqrt(...))
+    mfc1    $v0, $f0
+    jr      $ra
