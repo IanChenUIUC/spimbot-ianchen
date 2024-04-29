@@ -1,1 +1,34 @@
-<Explain your team's strategy, implementation, etc.>
+We noticed that shooting your opponent gains much more points than controlling the map.
+Thus, we decided to implement a suicide bot that rushes towards the opponent and tries to kill them before we get shot.
+
+The main part of this is the A* algorithm:
+- we store the distances and heuristics into main memory
+- we store the path (and parent pointers) also into main memory
+- running the A* algorithm uses a priority queue (data stored into memory) for ordering
+
+Then, we have the actual game logic. 
+The main difficulty was that the bot was tracking a position that was too far where the opponent actually is.
+Pathfinding towards a moving target is HARD.
+
+The choice we ended up doing was that we would almost continuously reupdate our pathfind.
+In particular, we have 3 options for starting a new pathfind:
+- when we are done with the current path, then we stop and calculate the path to where opp current is
+- when we are almost done with our current path, then we store the remainder of the path into a buffer and update new path
+- when we notice that opp has moved too far, then we store path into a buffer and overwrite when we are done
+
+However, the A* algorithm seems to be taking >25k cycles to finish, which is SLOW.
+This may be because the timer keeps interrupting the A* algorithm, and because the interrupt handler has so much logic, it is very slow.
+
+To spend less time waiting, we decided to put all the move velocity/angle setting into the interrupt handler.
+In particular, we use the angle towards each tile and the manhattan distance to set the timer.
+However, this is a LOT of control flow and it is very slow.
+
+To summarize:
+- pathfinding towards a moving target is HARD (and very slow)
+- control flow is very SLOW
+- simple is more efficacious than complex (too much logic, not effective)
+
+There seem to be much better algorithms for tracking a moving target (see ballistics guidence :)) than storing the current into a buffer.
+For example, we can smooth our path and interpolate.
+Implementing this may work, but it may just be unecessary logic.
+To improve this spimbot, we would need to simplify the logic and the control flow significantly.
