@@ -2,55 +2,19 @@ GRIDSIZE = 4                    ## Sudoku
 GRID_SQUARED = 16
 ALL_VALUES = 65535
 sudoku_solve:
-    sub  $sp, $sp, 28
+    sub  $sp, $sp, 4
     sw   $ra, 0($sp)
-    sw   $a0, 4($sp)
-    sw   $a1, 8($sp)
-    sw   $s0, 12($sp) # changed
-    sw   $s1, 16($sp)
-    sw   $s2, 20($sp) # solution
-    sw   $s3, 24($sp)
-    li $s0, 0
-    li $s2, 1
-    move $s1, $a0
-quant_solve_first_do_while:
+
+solve_loop:
     jal  rule1
-    move $s0, $v0
-    beq  $s0, $zero, quant_solve_first_if
-    move $a0, $s1
-    jal  board_done
-    beq  $v0, $zero, quant_solve_first_do_while
-quant_solve_first_if:
-    move $a0, $s1
-    jal  board_done
-    bne  $v0, $zero, quant_solve_second_if
-    addi $s2, $s2, 1
-quant_solve_second_do_while:
-    move $a0, $s1
-    jal  rule1
-    move $s0, $v0
-    move $a0, $s1
     jal  rule2
-    or   $s0, $s0, $v0
-    beq  $s0, $zero, quant_solve_second_if
-    move $a0, $s1
-    jal  board_done
-    bne  $v0, $zero, quant_solve_second_do_while
-quant_solve_second_if:
-    move $a0, $s1
-    jal  board_done
-    li   $v0, 0
-    beq  $v0, $zero, quant_solve_exit
-    move $v0, $s2
+
+    jal     board_done
+    beq     $v0     $0  solve_loop    
+
 quant_solve_exit:
     lw   $ra, 0($sp)
-    lw   $a0, 4($sp)
-    lw   $a1, 8($sp)
-    lw   $s0, 12($sp) # changed
-    lw   $s1, 16($sp) # iter
-    lw   $s2, 20($sp) # solution
-    lw   $s3, 24($sp)
-    add  $sp, $sp, 28
+    add  $sp, $sp, 4
     jr   $ra
 
         .align    2

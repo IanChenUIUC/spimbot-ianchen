@@ -2,7 +2,7 @@ MAP_SIZE                = 40            ## 40 x 40 map
 TILE_SIZE               = 8             ## 8 x 8 tile    
 HALF_TILE_SIZE          = 4             ## 8 / 2 = 4
 MAX_DIST                = 16            ## manhattan dist between path endpoint and opponent
-MAX_BULLETS             = 50            ## don't solve puzzles when bullets > 100
+MAX_BULLETS             = 30            ## don't solve puzzles when bullets > 100
 MIN_BULLETS             = 20            ## don't solve puzzles when bullets > 100
 PATHFIND_BUFFER         = 12            ## start calculating next path when almost done with current path
 

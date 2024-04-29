@@ -429,6 +429,7 @@ make_path:
     li      $v0     0                   # size
 
 make_path_loop:
+    bge     $v0     1600    make_path_end    
     sw      $t0     0($t1)              # path.append(cur)
     add     $t1     $t1     4
     add     $v0     $v0     1
