@@ -1,8 +1,9 @@
 MAP_SIZE                = 40            ## 40 x 40 map
 TILE_SIZE               = 8             ## 8 x 8 tile    
 HALF_TILE_SIZE          = 4             ## 8 / 2 = 4
-MAX_DIST                = 8             ## manhattan dist between path endpoint and opponent
-MAX_BULLETS             = 100           ## don't solve puzzles when bullets > 100
+MAX_DIST                = 16            ## manhattan dist between path endpoint and opponent
+MAX_BULLETS             = 50            ## don't solve puzzles when bullets > 100
+MIN_BULLETS             = 20            ## don't solve puzzles when bullets > 100
 PATHFIND_BUFFER         = 12            ## start calculating next path when almost done with current path
 
 # syscall constants
@@ -101,6 +102,9 @@ loop_solve_puzzle:
     jal     request_puzzle
 
 loop_do_chase:
+    lw      $t0     GET_AVAILABLE_BULLETS
+    blt     $t0     MIN_BULLETS     loop_solve_puzzle
+
     # check if path is done
     lb      $t0     path_done
     bne     $t0     $0  do_chase_finished
@@ -178,6 +182,9 @@ do_chase_near_finished:
     li      $t0     1
     sb      $t0     buf_ready    
 
+    li      $t0     100
+    sw      $t0     TIMER
+
     j       loop_end
 
 do_chase_outdated:
@@ -202,6 +209,9 @@ do_chase_outdated:
 
     li      $t0     1
     sb      $t0     buf_ready    
+
+    li      $t0     100
+    sw      $t0     TIMER
 
     j       loop_end  
 
@@ -385,6 +395,17 @@ bonk_interrupt:
     la      $t0 path
     sw      $t0 path_pos    
     sw      $t0 path_end
+    li      $t0 1
+    sb      $t0 path_done
+
+    li      $t0     0
+    sw      $t0     SHOOT
+    li      $t0     1
+    sw      $t0     SHOOT
+    li      $t0     2
+    sw      $t0     SHOOT
+    li      $t0     3
+    sw      $t0     SHOOT
 
     j       interrupt_dispatch      # see if other interrupts are waiting
 
@@ -399,13 +420,12 @@ respawn_interrupt:
     sw      $0, RESPAWN_ACK
 
     sw      $0  VELOCITY
+
     la      $t0 path
     sw      $t0 path_pos    
     sw      $t0 path_end
-
-    lw      $t0 TIMER
-    add     $t0 $t0 500
-    sw      $t0 TIMER    
+    li      $t0 1
+    sb      $t0 path_done    
 
     j       interrupt_dispatch
 
@@ -530,19 +550,6 @@ do_move:
     mul     $t2     $t2     MAP_SIZE
     add     $s2     $t1     $t2         # next position
 
-    li      $t0     10                  # velocity
-    la      $t1     VELOCITY
-    sw      $t0     0($t1)              # set velocity
-
-    move    $a0     $s0
-    move    $a1     $s1
-    jal     euclidean_dist
-    mul     $t0     $v0     1000        # 1000 cycles per pixel
-
-    lw      $t1     TIMER               # request timer
-    add     $t0     $t0     $t1
-    sw      $t0     TIMER
-
     move    $a0     $s0
     move    $a1     $s1
     jal     sb_arctan                   # v0 stores angle
@@ -569,6 +576,20 @@ do_shoot:
     sw      $t0     SHOOT
 
 return_do_move:
+    li      $t0     10                  # velocity
+    la      $t1     VELOCITY
+    sw      $t0     0($t1)              # set velocity
+
+    move    $a0     $s0
+    move    $a1     $s1
+    jal     euclidean_dist
+    mul     $t0     $v0     1000        # 1000 cycles per pixel
+
+    lw      $t1     TIMER               # request timer
+    add     $t0     $t0     $t1
+    sw      $t0     TIMER
+
+    move    $a0     $s0
     lw      $ra     0($sp)
     lw      $s0     4($sp)
     lw      $s1     8($sp)
